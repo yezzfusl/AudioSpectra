@@ -67,6 +67,21 @@ bool AudioProcessor::initialize(int inputDevice, int outputDevice, double sample
                                         reinterpret_cast<fftwf_complex*>(ifftInput.data()), 
                                         ifftOutput.data(), FFTW_MEASURE);
 
+    // Initialize JUCE DSP
+    processSpec.sampleRate = sampleRate;
+    processSpec.maximumBlockSize = framesPerBuffer;
+    processSpec.numChannels = 1;
+
+    equalizer.prepare(processSpec);
+
+    // Set up initial EQ parameters
+    setLowFrequency(100.0f);
+    setMidFrequency(1000.0f);
+    setHighFrequency(5000.0f);
+    setLowGain(0.0f);
+    setMidGain(0.0f);
+    setHighGain(0.0f);
+
     return true;
 }
 
@@ -109,6 +124,12 @@ void AudioProcessor::performIFFT() {
     }
 }
 
+void AudioProcessor::processAudio(const float* inputBuffer, float* outputBuffer, unsigned long framesPerBuffer) {
+    juce::dsp::AudioBlock<float> block(&outputBuffer[0], 1, framesPerBuffer);
+    juce::dsp::ProcessContextReplacing<float> context(block);
+    equalizer.process(context);
+}
+
 int AudioProcessor::audioCallback(const void *inputBuffer, void *outputBuffer,
                                   unsigned long framesPerBuffer,
                                   const PaStreamCallbackTimeInfo* timeInfo,
@@ -125,12 +146,9 @@ int AudioProcessor::audioCallback(const void *inputBuffer, void *outputBuffer,
 
     processor->performFFT();
 
-    // Simple spectral processing: attenuate high frequencies
-    for (unsigned long i = framesPerBuffer / 4; i < processor->fftOutput.size(); i++) {
-        processor->fftOutput[i] *= 0.5f;
-    }
+    // Apply EQ in frequency domain (simplified)
+    processor->processAudio(processor->fftInput.data(), processor->ifftOutput.data(), framesPerBuffer);
 
-    processor->ifftInput = processor->fftOutput;
     processor->performIFFT();
 
     // Copy processed left channel to both output channels
@@ -139,4 +157,37 @@ int AudioProcessor::audioCallback(const void *inputBuffer, void *outputBuffer,
     }
 
     return paContinue;
+}
+
+void AudioProcessor::setLowFrequency(float freq) {
+    auto& filter = equalizer.get<0>();
+    *filter.state = *juce::dsp::IIR::Coefficients<float>::makeLowShelf(processSpec.sampleRate, freq, 0.707f, 1.0f);
+}
+
+void AudioProcessor::setMidFrequency(float freq) {
+    auto& filter = equalizer.get<1>();
+    *filter.state = *juce::dsp::IIR::Coefficients<float>::makePeakFilter(processSpec.sampleRate, freq, 0.707f, 1.0f);
+}
+
+void AudioProcessor::setHighFrequency(float freq) {
+    auto& filter = equalizer.get<2>();
+    *filter.state = *juce::dsp::IIR::Coefficients<float>::makeHighShelf(processSpec.sampleRate, freq, 0.707f, 1.0f);
+}
+
+void AudioProcessor::setLowGain(float gain) {
+    auto& filter = equalizer.get<0>();
+    auto* lowShelf = dynamic_cast<juce::dsp::IIR::Coefficients<float>*>(filter.state);
+    *lowShelf = *juce::dsp::IIR::Coefficients<float>::makeLowShelf(processSpec.sampleRate, lowShelf->getRawCoefficients()[4], 0.707f, std::pow(10.0f, gain / 20.0f));
+}
+
+void AudioProcessor::setMidGain(float gain) {
+    auto& filter = equalizer.get<1>();
+    auto* peak = dynamic_cast<juce::dsp::IIR::Coefficients<float>*>(filter.state);
+    *peak = *juce::dsp::IIR::Coefficients<float>::makePeakFilter(processSpec.sampleRate, peak->getRawCoefficients()[4], 0.707f, std::pow(10.0f, gain / 20.0f));
+}
+
+void AudioProcessor::setHighGain(float gain) {
+    auto& filter = equalizer.get<2>();
+    auto* highShelf = dynamic_cast<juce::dsp::IIR::Coefficients<float>*>(filter.state);
+    *highShelf = *juce::dsp::IIR::Coefficients<float>::makeHighShelf(processSpec.sampleRate, highShelf->getRawCoefficients()[4], 0.707f, std::pow(10.0f, gain / 20.0f));
 }
