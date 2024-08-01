@@ -43,9 +43,8 @@ AudioSpectra is a high-performance audio processing system designed for real-tim
 
 ### Build Instructions
 1. **Clone the Repository:**
-          ```bash
-   git clone https://github.com/yezzfusl/AudioSpectra.git 
-   cd AudioSpectra
+   - ```git clone https://github.com/yezzfusl/AudioSpectra.git```
+   - `cd AudioSpectra`
 
 2. Install Dependencies:
 Follow the installation instructions for each library and framework.
