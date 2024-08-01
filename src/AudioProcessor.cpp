@@ -72,7 +72,7 @@ bool AudioProcessor::initialize(int inputDevice, int outputDevice, double sample
     processSpec.maximumBlockSize = framesPerBuffer;
     processSpec.numChannels = 1;
 
-    equalizer.prepare(processSpec);
+    processorChain.prepare(processSpec);
 
     // Set up initial EQ parameters
     setLowFrequency(100.0f);
@@ -81,6 +81,18 @@ bool AudioProcessor::initialize(int inputDevice, int outputDevice, double sample
     setLowGain(0.0f);
     setMidGain(0.0f);
     setHighGain(0.0f);
+
+    // Set up initial reverb parameters
+    setReverbRoomSize(0.5f);
+    setReverbDamping(0.5f);
+    setReverbWetLevel(0.33f);
+    setReverbDryLevel(0.4f);
+
+    // Set up initial compressor parameters
+    setCompressorThreshold(-10.0f);
+    setCompressorRatio(2.0f);
+    setCompressorAttack(5.0f);
+    setCompressorRelease(100.0f);
 
     return true;
 }
@@ -127,7 +139,7 @@ void AudioProcessor::performIFFT() {
 void AudioProcessor::processAudio(const float* inputBuffer, float* outputBuffer, unsigned long framesPerBuffer) {
     juce::dsp::AudioBlock<float> block(&outputBuffer[0], 1, framesPerBuffer);
     juce::dsp::ProcessContextReplacing<float> context(block);
-    equalizer.process(context);
+    processorChain.process(context);
 }
 
 int AudioProcessor::audioCallback(const void *inputBuffer, void *outputBuffer,
@@ -146,7 +158,7 @@ int AudioProcessor::audioCallback(const void *inputBuffer, void *outputBuffer,
 
     processor->performFFT();
 
-    // Apply EQ in frequency domain (simplified)
+    // Apply processing chain
     processor->processAudio(processor->fftInput.data(), processor->ifftOutput.data(), framesPerBuffer);
 
     processor->performIFFT();
@@ -160,34 +172,81 @@ int AudioProcessor::audioCallback(const void *inputBuffer, void *outputBuffer,
 }
 
 void AudioProcessor::setLowFrequency(float freq) {
-    auto& filter = equalizer.get<0>();
+    auto& filter = processorChain.get<0>();
     *filter.state = *juce::dsp::IIR::Coefficients<float>::makeLowShelf(processSpec.sampleRate, freq, 0.707f, 1.0f);
 }
 
 void AudioProcessor::setMidFrequency(float freq) {
-    auto& filter = equalizer.get<1>();
+    auto& filter = processorChain.get<1>();
     *filter.state = *juce::dsp::IIR::Coefficients<float>::makePeakFilter(processSpec.sampleRate, freq, 0.707f, 1.0f);
 }
 
 void AudioProcessor::setHighFrequency(float freq) {
-    auto& filter = equalizer.get<2>();
+    auto& filter = processorChain.get<2>();
     *filter.state = *juce::dsp::IIR::Coefficients<float>::makeHighShelf(processSpec.sampleRate, freq, 0.707f, 1.0f);
 }
 
 void AudioProcessor::setLowGain(float gain) {
-    auto& filter = equalizer.get<0>();
+    auto& filter = processorChain.get<0>();
     auto* lowShelf = dynamic_cast<juce::dsp::IIR::Coefficients<float>*>(filter.state);
     *lowShelf = *juce::dsp::IIR::Coefficients<float>::makeLowShelf(processSpec.sampleRate, lowShelf->getRawCoefficients()[4], 0.707f, std::pow(10.0f, gain / 20.0f));
 }
 
 void AudioProcessor::setMidGain(float gain) {
-    auto& filter = equalizer.get<1>();
+    auto& filter = processorChain.get<1>();
     auto* peak = dynamic_cast<juce::dsp::IIR::Coefficients<float>*>(filter.state);
     *peak = *juce::dsp::IIR::Coefficients<float>::makePeakFilter(processSpec.sampleRate, peak->getRawCoefficients()[4], 0.707f, std::pow(10.0f, gain / 20.0f));
 }
 
 void AudioProcessor::setHighGain(float gain) {
-    auto& filter = equalizer.get<2>();
+    auto& filter = processorChain.get<2>();
     auto* highShelf = dynamic_cast<juce::dsp::IIR::Coefficients<float>*>(filter.state);
     *highShelf = *juce::dsp::IIR::Coefficients<float>::makeHighShelf(processSpec.sampleRate, highShelf->getRawCoefficients()[4], 0.707f, std::pow(10.0f, gain / 20.0f));
 }
+
+void AudioProcessor::setReverbRoomSize(float size) {
+    auto& reverb = processorChain.get<3>();
+    auto params = reverb.getParameters();
+    params.roomSize = size;
+    reverb.setParameters(params);
+}
+
+void AudioProcessor::setReverbDamping(float damping) {
+    auto& reverb = processorChain.get<3>();
+    auto params = reverb.getParameters();
+    params.damping = damping;
+    reverb.setParameters(params);
+}
+
+void AudioProcessor::setReverbWetLevel(float wetLevel) {
+    auto& reverb = processorChain.get<3>();
+    auto params = reverb.getParameters();
+    params.wetLevel = wetLevel;
+    reverb.setParameters(params);
+}
+
+void AudioProcessor::setReverbDryLevel(float dryLevel) {
+    auto& reverb = processorChain.get<3>();
+    auto params = reverb.getParameters();
+    params.dryLevel = dryLevel;
+    reverb.setParameters(params);
+}
+
+void AudioProcessor::setCompressorThreshold(float threshold) {
+    auto& compressor = processorChain.get<4>();
+    compressor.setThreshold(threshold);
+}
+
+void AudioProcessor::setCompressorRatio(float ratio) {
+    auto& compressor = processorChain.get<4>();
+    compressor.setRatio(ratio);
+}
+
+void AudioProcessor::setCompressorAttack(float attack) {
+    auto& compressor = processorChain.get<4>();
+    compressor.setAttack(attack);
+}
+
+void AudioProcessor::setCompressorRelease(float release) {
+    auto& compressor = processorChain.get<4>();
+    compressor.setRelease(release);

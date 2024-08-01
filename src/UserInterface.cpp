@@ -51,7 +51,17 @@ void UserInterface::render() {
 
     ImGui::Begin("Audio Processor Controls");
     
-    renderEQControls();
+    if (ImGui::CollapsingHeader("Equalizer")) {
+        renderEQControls();
+    }
+    
+    if (ImGui::CollapsingHeader("Reverb")) {
+        renderReverbControls();
+    }
+    
+    if (ImGui::CollapsingHeader("Compressor")) {
+        renderCompressorControls();
+    }
 
     ImGui::End();
 
@@ -88,5 +98,35 @@ void UserInterface::renderEQControls() {
     }
     if (ImGui::SliderFloat("High Gain", &highGain, -12.0f, 12.0f, "%.1f dB")) {
         audioProcessor.setHighGain(highGain);
+    }
+}
+
+void UserInterface::renderReverbControls() {
+    if (ImGui::SliderFloat("Room Size", &reverbRoomSize, 0.0f, 1.0f)) {
+        audioProcessor.setReverbRoomSize(reverbRoomSize);
+    }
+    if (ImGui::SliderFloat("Damping", &reverbDamping, 0.0f, 1.0f)) {
+        audioProcessor.setReverbDamping(reverbDamping);
+    }
+    if (ImGui::SliderFloat("Wet Level", &reverbWetLevel, 0.0f, 1.0f)) {
+        audioProcessor.setReverbWetLevel(reverbWetLevel);
+    }
+    if (ImGui::SliderFloat("Dry Level", &reverbDryLevel, 0.0f, 1.0f)) {
+        audioProcessor.setReverbDryLevel(reverbDryLevel);
+    }
+}
+
+void UserInterface::renderCompressorControls() {
+    if (ImGui::SliderFloat("Threshold", &compressorThreshold, -60.0f, 0.0f, "%.1f dB")) {
+        audioProcessor.setCompressorThreshold(compressorThreshold);
+    }
+    if (ImGui::SliderFloat("Ratio", &compressorRatio, 1.0f, 20.0f, "%.1f:1")) {
+        audioProcessor.setCompressorRatio(compressorRatio);
+    }
+    if (ImGui::SliderFloat("Attack", &compressorAttack, 0.1f, 100.0f, "%.1f ms")) {
+        audioProcessor.setCompressorAttack(compressorAttack);
+    }
+    if (ImGui::SliderFloat("Release", &compressorRelease, 10.0f, 1000.0f, "%.1f ms")) {
+        audioProcessor.setCompressorRelease(compressorRelease);
     }
 }
