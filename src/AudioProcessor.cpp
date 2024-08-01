@@ -1,12 +1,17 @@
 #include "../include/AudioProcessor.h"
 #include <iostream>
 #include <cstring>
+#include <algorithm>
 
-AudioProcessor::AudioProcessor() : stream(nullptr), sampleRate(44100.0), framesPerBuffer(256) {}
+AudioProcessor::AudioProcessor() : stream(nullptr), sampleRate(44100.0), framesPerBuffer(256),
+                                   forwardPlan(nullptr), inversePlan(nullptr) {}
 
 AudioProcessor::~AudioProcessor() {
     stop();
     Pa_Terminate();
+    if (forwardPlan) fftwf_destroy_plan(forwardPlan);
+    if (inversePlan) fftwf_destroy_plan(inversePlan);
+    fftwf_cleanup();
 }
 
 bool AudioProcessor::initialize(int inputDevice, int outputDevice, double sampleRate, unsigned long framesPerBuffer) {
@@ -50,6 +55,18 @@ bool AudioProcessor::initialize(int inputDevice, int outputDevice, double sample
     inputBuffer.resize(framesPerBuffer * 2);
     outputBuffer.resize(framesPerBuffer * 2);
 
+    // Initialize FFT-related buffers and plans
+    fftInput.resize(framesPerBuffer);
+    fftOutput.resize(framesPerBuffer / 2 + 1);
+    ifftInput.resize(framesPerBuffer / 2 + 1);
+    ifftOutput.resize(framesPerBuffer);
+
+    forwardPlan = fftwf_plan_dft_r2c_1d(framesPerBuffer, fftInput.data(), 
+                                        reinterpret_cast<fftwf_complex*>(fftOutput.data()), FFTW_MEASURE);
+    inversePlan = fftwf_plan_dft_c2r_1d(framesPerBuffer, 
+                                        reinterpret_cast<fftwf_complex*>(ifftInput.data()), 
+                                        ifftOutput.data(), FFTW_MEASURE);
+
     return true;
 }
 
@@ -79,6 +96,19 @@ bool AudioProcessor::stop() {
     return true;
 }
 
+void AudioProcessor::performFFT() {
+    fftwf_execute(forwardPlan);
+}
+
+void AudioProcessor::performIFFT() {
+    fftwf_execute(inversePlan);
+    // Normalize the output
+    float normFactor = 1.0f / framesPerBuffer;
+    for (auto& sample : ifftOutput) {
+        sample *= normFactor;
+    }
+}
+
 int AudioProcessor::audioCallback(const void *inputBuffer, void *outputBuffer,
                                   unsigned long framesPerBuffer,
                                   const PaStreamCallbackTimeInfo* timeInfo,
@@ -88,9 +118,24 @@ int AudioProcessor::audioCallback(const void *inputBuffer, void *outputBuffer,
     float* in = (float*)inputBuffer;
     float* out = (float*)outputBuffer;
 
-    // Simple pass-through for now
-    for (unsigned long i = 0; i < framesPerBuffer * 2; i++) {
-        out[i] = in[i];
+    // Process left channel (assuming stereo input)
+    for (unsigned long i = 0; i < framesPerBuffer; i++) {
+        processor->fftInput[i] = in[i * 2];
+    }
+
+    processor->performFFT();
+
+    // Simple spectral processing: attenuate high frequencies
+    for (unsigned long i = framesPerBuffer / 4; i < processor->fftOutput.size(); i++) {
+        processor->fftOutput[i] *= 0.5f;
+    }
+
+    processor->ifftInput = processor->fftOutput;
+    processor->performIFFT();
+
+    // Copy processed left channel to both output channels
+    for (unsigned long i = 0; i < framesPerBuffer; i++) {
+        out[i * 2] = out[i * 2 + 1] = processor->ifftOutput[i];
     }
 
     return paContinue;
