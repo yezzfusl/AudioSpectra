@@ -16,13 +16,25 @@ public:
     bool start();
     bool stop();
 
-    // Add methods to control EQ parameters
+    // EQ methods
     void setLowFrequency(float freq);
     void setMidFrequency(float freq);
     void setHighFrequency(float freq);
     void setLowGain(float gain);
     void setMidGain(float gain);
     void setHighGain(float gain);
+
+    // Reverb methods
+    void setReverbRoomSize(float size);
+    void setReverbDamping(float damping);
+    void setReverbWetLevel(float wetLevel);
+    void setReverbDryLevel(float dryLevel);
+
+    // Compressor methods
+    void setCompressorThreshold(float threshold);
+    void setCompressorRatio(float ratio);
+    void setCompressorAttack(float attack);
+    void setCompressorRelease(float release);
 
 private:
     static int audioCallback(const void *inputBuffer, void *outputBuffer,
@@ -55,6 +67,8 @@ private:
     // JUCE DSP-related members
     juce::dsp::ProcessorChain<juce::dsp::IIR::Filter<float>, 
                               juce::dsp::IIR::Filter<float>, 
-                              juce::dsp::IIR::Filter<float>> equalizer;
+                              juce::dsp::IIR::Filter<float>,
+                              juce::dsp::Reverb,
+                              juce::dsp::Compressor<float>> processorChain;
     juce::dsp::ProcessSpec processSpec;
 };
