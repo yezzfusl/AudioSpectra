@@ -7,8 +7,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Find required packages
 find_package(PortAudio REQUIRED)
 find_package(FFTW3 REQUIRED)
-find_package(JUCE REQUIRED)
-find_package(SQLite3 REQUIRED)
+
+# JUCE setup
+add_subdirectory(JUCE)
+juce_add_module(juce_dsp)
 
 # Add executable
 add_executable(AdvancedAudioProcessor 
@@ -21,14 +23,17 @@ target_include_directories(AdvancedAudioProcessor PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${PORTAUDIO_INCLUDE_DIRS}
     ${FFTW3_INCLUDE_DIRS}
-    ${JUCE_INCLUDE_DIRS}
-    ${SQLITE3_INCLUDE_DIRS}
 )
 
 # Link libraries
 target_link_libraries(AdvancedAudioProcessor PRIVATE 
     ${PORTAUDIO_LIBRARIES}
     ${FFTW3_LIBRARIES}
-    ${JUCE_LIBRARIES}
-    ${SQLITE3_LIBRARIES}
+    juce::juce_dsp
+)
+
+# JUCE-specific settings
+target_compile_definitions(AdvancedAudioProcessor PRIVATE
+    JUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1
+    JUCE_STANDALONE_APPLICATION=1
 )
