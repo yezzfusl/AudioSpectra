@@ -2,9 +2,19 @@
 #include <iostream>
 #include <cstring>
 #include <algorithm>
+#include <cmath>
+#include <random>
+#include <complex>
 
-AudioProcessor::AudioProcessor() : stream(nullptr), sampleRate(44100.0), framesPerBuffer(256),
-                                   forwardPlan(nullptr), inversePlan(nullptr) {}
+AudioProcessor::AudioProcessor() 
+    : stream(nullptr), sampleRate(44100.0), framesPerBuffer(256),
+      forwardPlan(nullptr), inversePlan(nullptr), 
+      noiseGenerator(0.0, 1.0), randomEngine(std::random_device{}()),
+      delayWriteIndex(0), currentDelayTime(0), delayFeedback(0.5f),
+      pitchShiftFactor(1.0f), grainSize(256),
+      modulationFrequency(1.0f), modulationDepth(0.5f), modulationPhase(0.0f),
+      noiseGateThreshold(-60.0f), noiseGateAttack(0.01f), noiseGateRelease(0.1f), noiseGateGain(1.0f),
+      distortionAmount(1.0f), noiseAmount(0.01f) {}
 
 AudioProcessor::~AudioProcessor() {
     stop();
@@ -94,6 +104,16 @@ bool AudioProcessor::initialize(int inputDevice, int outputDevice, double sample
     setCompressorAttack(5.0f);
     setCompressorRelease(100.0f);
 
+    // Initialize new buffers and components
+    delayBuffer.resize(sampleRate * 5); // 5 seconds max delay
+    currentDelayTime = 0.5 * sampleRate; // 0.5 second default delay
+    delayFeedback = 0.5f;
+
+    // Initialize pitch shifter
+    pitchShiftFactor = 1.0f;
+    grainSize = 256;
+    pitchShiftBuffer.resize(grainSize * 2);
+
     return true;
 }
 
@@ -137,9 +157,18 @@ void AudioProcessor::performIFFT() {
 }
 
 void AudioProcessor::processAudio(const float* inputBuffer, float* outputBuffer, unsigned long framesPerBuffer) {
+    // Apply existing DSP chain
     juce::dsp::AudioBlock<float> block(&outputBuffer[0], 1, framesPerBuffer);
     juce::dsp::ProcessContextReplacing<float> context(block);
     processorChain.process(context);
+
+    // Apply additional processing
+    applyDelay(outputBuffer, framesPerBuffer);
+    applyPitchShift(outputBuffer, framesPerBuffer);
+    applyModulation(outputBuffer, framesPerBuffer);
+    applyNoiseGate(outputBuffer, framesPerBuffer);
+    applyDistortion(outputBuffer, framesPerBuffer);
+    addWhiteNoise(outputBuffer, framesPerBuffer);
 }
 
 int AudioProcessor::audioCallback(const void *inputBuffer, void *outputBuffer,
@@ -250,3 +279,132 @@ void AudioProcessor::setCompressorAttack(float attack) {
 void AudioProcessor::setCompressorRelease(float release) {
     auto& compressor = processorChain.get<4>();
     compressor.setRelease(release);
+}
+
+void AudioProcessor::applyDelay(float* buffer, unsigned long framesPerBuffer) {
+    for (unsigned long i = 0; i < framesPerBuffer; ++i) {
+        float delayedSample = delayBuffer[(delayWriteIndex + i - currentDelayTime + delayBuffer.size()) % delayBuffer.size()];
+        float newSample = buffer[i] + delayFeedback * delayedSample;
+        delayBuffer[(delayWriteIndex + i) % delayBuffer.size()] = newSample;
+        buffer[i] = newSample;
+    }
+    delayWriteIndex = (delayWriteIndex + framesPerBuffer) % delayBuffer.size();
+}
+
+void AudioProcessor::applyPitchShift(float* buffer, unsigned long framesPerBuffer) {
+    for (unsigned long i = 0; i < framesPerBuffer; i += grainSize) {
+        // Copy input to pitch shift buffer
+        std::copy(buffer + i, buffer + i + grainSize, pitchShiftBuffer.begin());
+
+        // Apply window function (Hann window)
+        for (int j = 0; j < grainSize; ++j) {
+            float t = static_cast<float>(j) / (grainSize - 1);
+            pitchShiftBuffer[j] *= 0.5f * (1 - std::cos(2 * M_PI * t));
+        }
+
+        // Perform FFT
+        fftwf_execute_dft_r2c(forwardPlan, pitchShiftBuffer.data(), reinterpret_cast<fftwf_complex*>(fftOutput.data()));
+
+        // Shift frequency bins
+        int shift = static_cast<int>(std::round((pitchShiftFactor - 1.0f) * grainSize / 2));
+        if (shift > 0) {
+            std::copy_backward(fftOutput.begin(), fftOutput.end() - shift, fftOutput.end());
+            std::fill(fftOutput.begin(), fftOutput.begin() + shift, std::complex<float>(0, 0));
+        } else if (shift < 0) {
+            std::copy(fftOutput.begin() - shift, fftOutput.end(), fftOutput.begin());
+            std::fill(fftOutput.end() + shift, fftOutput.end(), std::complex<float>(0, 0));
+        }
+
+        // Perform IFFT
+        fftwf_execute_dft_c2r(inversePlan, reinterpret_cast<fftwf_complex*>(fftOutput.data()), pitchShiftBuffer.data());
+
+        // Apply window function again and normalize
+        float normFactor = 1.0f / grainSize;
+        for (int j = 0; j < grainSize; ++j) {
+            float t = static_cast<float>(j) / (grainSize - 1);
+            pitchShiftBuffer[j] *= 0.5f * (1 - std::cos(2 * M_PI * t)) * normFactor;
+        }
+
+        // Overlap-add to output
+        for (int j = 0; j < grainSize; ++j) {
+            buffer[i + j] = pitchShiftBuffer[j];
+        }
+    }
+}
+
+void AudioProcessor::applyModulation(float* buffer, unsigned long framesPerBuffer) {
+    for (unsigned long i = 0; i < framesPerBuffer; ++i) {
+        float modulation = modulationDepth * std::sin(2 * M_PI * modulationFrequency * modulationPhase);
+        buffer[i] *= (1.0f + modulation);
+        modulationPhase += 1.0f / sampleRate;
+        if (modulationPhase >= 1.0f) modulationPhase -= 1.0f;
+    }
+}
+
+void AudioProcessor::applyNoiseGate(float* buffer, unsigned long framesPerBuffer) {
+    float threshold = std::pow(10.0f, noiseGateThreshold / 20.0f);
+    float attackCoeff = std::exp(-1.0f / (noiseGateAttack * sampleRate));
+    float releaseCoeff = std::exp(-1.0f / (noiseGateRelease * sampleRate));
+
+    for (unsigned long i = 0; i < framesPerBuffer; ++i) {
+        float inputLevel = std::abs(buffer[i]);
+        if (inputLevel > threshold) {
+            noiseGateGain = std::min(noiseGateGain / attackCoeff, 1.0f);
+        } else {
+            noiseGateGain = std::max(noiseGateGain * releaseCoeff, 0.0f);
+        }
+        buffer[i] *= noiseGateGain;
+    }
+}
+
+void AudioProcessor::applyDistortion(float* buffer, unsigned long framesPerBuffer) {
+    for (unsigned long i = 0; i < framesPerBuffer; ++i) {
+        buffer[i] = std::tanh(distortionAmount * buffer[i]) / std::tanh(distortionAmount);
+    }
+}
+
+void AudioProcessor::addWhiteNoise(float* buffer, unsigned long framesPerBuffer) {
+    for (unsigned long i = 0; i < framesPerBuffer; ++i) {
+        buffer[i] += noiseAmount * noiseGenerator(randomEngine);
+    }
+}
+
+void AudioProcessor::setDelayTime(float delayTimeSeconds) {
+    currentDelayTime = static_cast<unsigned long>(delayTimeSeconds * sampleRate);
+}
+
+void AudioProcessor::setDelayFeedback(float feedback) {
+    delayFeedback = std::clamp(feedback, 0.0f, 0.99f);
+}
+
+void AudioProcessor::setPitchShiftFactor(float factor) {
+    pitchShiftFactor = factor;
+}
+
+void AudioProcessor::setModulationFrequency(float frequency) {
+    modulationFrequency = frequency;
+}
+
+void AudioProcessor::setModulationDepth(float depth) {
+    modulationDepth = std::clamp(depth, 0.0f, 1.0f);
+}
+
+void AudioProcessor::setNoiseGateThreshold(float thresholdDB) {
+    noiseGateThreshold = thresholdDB;
+}
+
+void AudioProcessor::setNoiseGateAttack(float attackSeconds) {
+    noiseGateAttack = attackSeconds;
+}
+
+void AudioProcessor::setNoiseGateRelease(float releaseSeconds) {
+    noiseGateRelease = releaseSeconds;
+}
+
+void AudioProcessor::setDistortionAmount(float amount) {
+    distortionAmount = amount;
+}
+
+void AudioProcessor::setNoiseAmount(float amount) {
+    noiseAmount = amount;
+}
